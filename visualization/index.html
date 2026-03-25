@@ -1,0 +1,210 @@
+Steps'],
+  clustering: ['Clusters','Inertia','Silhouette','Points'],
+  montecarlo: ['Mean return','VaR 99%','CVaR 99%','Volatility'],
+  portfolio:  ['Best return','Best vol','Sharpe','Assets'],
+  hft:        ['P&L','Trades','Spread','Inventory'],
+  fraud:      ['Flagged','FPR','TPR','Anomaly score'],
+  rsa:        ['Encrypted','Key size','Exponent','Padding'],
+  blockchain: ['Block #','Hash rate','Difficulty','Nonce'],
+  ids:        ['Alerts','Packets','Anomalies','Threshold'],
+  hashing:    ['Collisions','Buckets','Load factor','Probe len'],
+  feed:       ['Score','Diversity','Fatigue','Affinity'],
+  viral:      ['Susceptible','Infected','Recovered','R₀'],
+  rec:        ['Precision','Recall','Coverage','Novelty'],
+  bandit:     ['Best arm','Regret','Pulls','UCB score'],
+};
+
+function buildSidebar(category) {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.innerHTML = '';
+  const algos = ALGORITHMS[category];
+  if (!algos) return;
+
+  const section = document.createElement('div');
+  section.className = 'sidebar-section';
+  const label = document.createElement('div');
+  label.className = 'sidebar-section-label';
+  label.textContent = `// ${category.toUpperCase()} ALGORITHMS`;
+  section.appendChild(label);
+
+  algos.forEach(algo => {
+    const item = document.createElement('div');
+    item.className = `algo-item cat-${category} ${algo.id === currentAlgo ? 'active' : ''}`;
+    item.style.setProperty('--cat', algo.color);
+    item.onclick = () => selectAlgo(algo.id);
+    item.innerHTML = `
+      <div class="algo-icon" style="background:${algo.color}18">
+        <span style="font-size:16px">${algo.icon}</span>
+      </div>
+      <div>
+        <div class="algo-name">${algo.name}</div>
+        <div class="algo-complexity">${algo.complexity} · ${algo.domain}</div>
+      </div>
+    `;
+    section.appendChild(item);
+  });
+
+  sidebar.appendChild(section);
+}
+
+function switchCategory(cat) {
+  currentCategory = cat;
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.cat === cat));
+  const first = ALGORITHMS[cat]?.[0];
+  if (first) selectAlgo(first.id);
+  buildSidebar(cat);
+}
+
+function selectAlgo(id) {
+  // Cleanup current
+  if (currentAlgo && Visualizations[currentAlgo]?.cleanup) {
+    Visualizations[currentAlgo].cleanup();
+  }
+
+  // Clear scene objects (keep stars)
+  const toRemove = [];
+  scene.traverse(obj => {
+    if (obj !== scene && !(obj instanceof THREE.Points && obj.geometry.attributes.position.count > 2000)) {
+      toRemove.push(obj);
+    }
+  });
+  toRemove.forEach(obj => scene.remove(obj));
+
+  currentAlgo = id;
+
+  // Update sidebar active state
+  document.querySelectorAll('.algo-item').forEach(el => {
+    el.classList.toggle('active', el.onclick.toString().includes(`'${id}'`));
+  });
+
+  // Find algo config
+  const algoConfig = Object.values(ALGORITHMS).flat().find(a => a.id === id);
+  if (algoConfig) {
+    document.getElementById('viz-name').textContent = algoConfig.name.toUpperCase();
+    document.getElementById('viz-category').textContent =
+      `${currentCategory.charAt(0).toUpperCase()+currentCategory.slice(1)} · ${algoConfig.domain}`;
+    document.getElementById('complexity-badge').textContent = algoConfig.complexity;
+    document.getElementById('domain-badge').textContent = algoConfig.domain.split('·')[0].trim().toUpperCase();
+    document.getElementById('complexity-badge').style.color = algoConfig.color;
+    document.getElementById('complexity-badge').style.borderColor = algoConfig.color + '55';
+    document.getElementById('complexity-badge').style.background = algoConfig.color + '18';
+  }
+
+  // Update metrics labels
+  const metrics = CAT_METRICS[id] ?? ['Value 1','Value 2','Value 3','Value 4'];
+  const metricIds = ['m-radius','m-vel','m-period','m-inc'];
+  document.getElementById('metrics-content').innerHTML = metrics.map((label, i) =>
+    `<div class="metric-row"><span class="metric-label">${label}</span><span class="metric-value" id="${metricIds[i]}">—</span></div>`
+  ).join('');
+
+  // Init visualization
+  const viz = Visualizations[id];
+  if (viz) {
+    if (viz.notes) {
+      document.getElementById('algo-notes').textContent = viz.notes.algo;
+      document.getElementById('complexity-notes').innerHTML = viz.notes.complexity.replace(/`([^`]+)`/g, '<code>$1</code>');
+      document.getElementById('production-notes').textContent = viz.notes.production;
+    }
+    camera.position.set(0, 30, 90);
+    spherical = { r: 90, θ: 0.3, φ: 1.2 };
+    updateCameraFromSpherical();
+    viz.init();
+  }
+}
+
+function updateControl(key, value) {
+  const num = parseFloat(value);
+  controls[key] = num;
+
+  const labels = { altitude: 'alt-value', inclination: 'inc-value', speed: 'speed-value', eccentricity: 'ecc-value' };
+  const formats = {
+    altitude: v => `${Math.round(v)}`,
+    inclination: v => `${parseFloat(v).toFixed(1)}`,
+    speed: v => `${Math.round(v)}×`,
+    eccentricity: v => `${parseFloat(v).toFixed(2)}`,
+  };
+  const labelEl = document.getElementById(labels[key]);
+  if (labelEl) labelEl.textContent = (formats[key] || (v => v))(value);
+
+  if (Visualizations[currentAlgo]?.onControl) {
+    Visualizations[currentAlgo].onControl(key, num);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RENDER LOOP
+// ─────────────────────────────────────────────────────────────────────────────
+
+let lastTime = 0;
+function animate(now) {
+  animationId = requestAnimationFrame(animate);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+
+  // FPS counter
+  frameCount++;
+  if (now - lastFPSTime > 500) {
+    fps = Math.round(frameCount * 1000 / (now - lastFPSTime));
+    document.getElementById('fps-counter').textContent = fps;
+    frameCount = 0;
+    lastFPSTime = now;
+  }
+
+  // Update current visualization
+  if (Visualizations[currentAlgo]?.update) {
+    try { Visualizations[currentAlgo].update(dt); } catch(e) { /* isolate errors */ }
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CUSTOM CURSOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+const cursor = document.getElementById('cursor');
+const cursorRing = document.getElementById('cursor-ring');
+let cx = 0, cy = 0, rx = 0, ry = 0;
+
+document.addEventListener('mousemove', e => { cx = e.clientX; cy = e.clientY; });
+document.addEventListener('mouseover', e => {
+  if (e.target.matches('button, input, .algo-item')) {
+    cursor.style.width = '12px';
+    cursor.style.height = '12px';
+    cursorRing.style.width = '44px';
+    cursorRing.style.height = '44px';
+    cursorRing.style.borderColor = 'rgba(0,212,255,0.7)';
+  }
+});
+document.addEventListener('mouseout', e => {
+  if (e.target.matches('button, input, .algo-item')) {
+    cursor.style.width = '8px';
+    cursor.style.height = '8px';
+    cursorRing.style.width = '32px';
+    cursorRing.style.height = '32px';
+    cursorRing.style.borderColor = 'rgba(0,212,255,0.4)';
+  }
+});
+
+function updateCursor() {
+  cursor.style.left = cx + 'px';
+  cursor.style.top  = cy + 'px';
+  rx += (cx - rx) * 0.12;
+  ry += (cy - ry) * 0.12;
+  cursorRing.style.left = rx + 'px';
+  cursorRing.style.top  = ry + 'px';
+  requestAnimationFrame(updateCursor);
+}
+updateCursor();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOTSTRAP
+// ─────────────────────────────────────────────────────────────────────────────
+
+initThree();
+buildSidebar('aerospace');
+selectAlgo('orbital');
+animate(0);
+</script>
+</body>
+</html>
